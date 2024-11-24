@@ -28,9 +28,12 @@ https://github.com/adafruit/DHT-sensor-library/blob/master/examples/DHT_Unified_
 #define SCK_PIN D4
 #define SDA_PIN D3
 
-const char* SSID = "NAUGHTY";
-const char* PASSWORD = "VERYGOODBOY"; 
-const char* THINGSPEAK_API_KEY = "DONTFOMOONCRYPTO";
+// 12v fan controlled by relay - relay pin
+#define RELAY_PIN  D8  // The ESP8266 pin connected to the IN pin of relay
+
+const char* SSID = "NET-2044";
+const char* PASSWORD = "NHMRTECR"; 
+const char* THINGSPEAK_API_KEY = "M4OTKHFUMUTBOZXN";
 const char* thingspeak_host = "api.thingspeak.com";
 
 SSD1306Wire display(0x3c, SDA_PIN, SCK_PIN);
@@ -52,6 +55,9 @@ const int UPDATE_INTERVAL_SECONDS = 600;
 
 // Read sensors every 10 seconds
 const int READ_INTERVAL_SECONDS = 10;
+
+// Turn on Fan when temperature is above this value
+const int TEMPERATURE_TRESHOLD = 15;
 
 long READ_TIME = 0;
 long UPDATE_TIME = 0;
@@ -106,9 +112,13 @@ void setup() {
   Serial.print("   WiFi connected: ");
   Serial.println(WiFi.localIP());
 
+  // 12v fan relay setup
+  pinMode(RELAY_PIN, OUTPUT);
+
   Serial.println("- - - - -  SETUP COMPLETE  - - - - -");
 }
 
+// read light value from light sensor
 void readLight() {
 
   Serial.print("Light = ");
@@ -133,6 +143,7 @@ void readLight() {
   Serial.println(light);
 }
 
+// read pressure from Atmosphere sensor - not being used
 void readPressure(){
 
   if (ATMOSPHERE_ON) {
@@ -149,6 +160,7 @@ void readPressure(){
   }
 }
 
+// read temperature from Atmosphere sensor
 void readTemperature(){
 
   if (ATMOSPHERE_ON) {
@@ -161,15 +173,18 @@ void readTemperature(){
 
 }
 
+// Read humidity from DHT sensor
 void readHumidity() {
 
+  Serial.print("Humidity = ");
   dht.humidity().getEvent(&event);
   humidity = event.relative_humidity;
-  Serial.print("Humidity = "); Serial.println(humidity);
+  Serial.print(humidity); Serial.println(" %");
 
   // if u want to use for temp: dht.temperature().getEvent(&event);
 }
 
+// update latest sensor readings to ThingSpeak
 void updateThingsSpeak(int h, int t, int l, int a) {
 
   // Serial.print("connecting to "); Serial.println(host);
@@ -212,6 +227,7 @@ void updateThingsSpeak(int h, int t, int l, int a) {
   Serial.println();
 }
 
+// Simply write a message on the display
 void displayMessage(String message) {
   display.clear();
   display.setFont(ArialMT_Plain_10);
@@ -220,7 +236,8 @@ void displayMessage(String message) {
   display.display();
 }
 
-void displayWeatherStationInfo() {
+// print sensor data to serial
+void printWeatherStationSensorData() {
   display.clear();
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -230,9 +247,23 @@ void displayWeatherStationInfo() {
   display.display();
 }
 
+// check temperature is above treshold, if so turn on the fan
+void checkAndAdjustTemperature() {
+
+  if (temperature > TEMPERATURE_TRESHOLD) {
+    digitalWrite(RELAY_PIN, HIGH); // turn on fan via relay
+  }
+
+}
+
+// check if sensors are above treshold and act on it - play God.
+void adjustWeather() {
+  void checkAndAdjustTemperature();
+}
+
 void loop() {
 
-  // read values from the sensor
+  // read values from sensors
   if (millis() - READ_TIME > READ_INTERVAL_SECONDS * 1000) {
 
     readTemperature();
@@ -250,7 +281,10 @@ void loop() {
     UPDATE_TIME = millis();
   }
 
-  displayWeatherStationInfo();
+  printWeatherStationSensorData();
+
+  // check if sensors are above treshold and act on it - play God.
+  adjustWeather();
 
   // Go back to sleep. If your sensor is battery powered you might
   delay(1000 * READ_INTERVAL_SECONDS);
