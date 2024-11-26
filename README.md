@@ -12,7 +12,16 @@ I eventually disabled Atmospheric pressure, but the skelleton code is still ther
 
 ## Update in code:
 ```
-const char* SSID = "NAUGHTY";                        > your wifi ssid
-const char* PASSWORD = "VERYGOODBOY";                > your wifi password
-const char* THINGSPEAK_API_KEY = "DONTFOMOONCRYPTO"; > use your API key
+const char* SSID = "NAUGHTY";                        // > your wifi ssid
+const char* PASSWORD = "VERYGOODBOY";                // > your wifi password
+const char* THINGSPEAK_API_KEY = "DONTFOMOONCRYPTO"; // > use your API key
+
+const char* DATA_CAKE_API_URL = "https://api.datacake.co/integrations/api/a3f2102d-****-****-****-ed1d240d8ff9/"; // > your device api url from data cake device Configuration
+const char* DATA_CAKE_API_KEY = "DONTFOMOONCRYPTO"; // > your API token from data cake account settings
+const char* DATA_CAKE_DEVICE_ID = "53283b61-****-****-****-e26079f231ac"; // > your device id from data cake device Configuration
+
+const char* SUPABASE_DB_API_ENDPOINT = "https://aqyrdklquuwloithqtal.supabase.co"; // > your supabase project url, you can check on project settings
+// > your access token from supabase project settings
+const char* SUPABASE_ACCESS_TOKEN = "DONTFOMOONCRYPTO";
+const char* SUPABASE_CONFIG_TABLE = "weather-station-config"; // > your table name as created on supabase
 ```

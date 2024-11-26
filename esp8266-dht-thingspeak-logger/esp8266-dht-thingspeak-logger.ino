@@ -7,6 +7,9 @@ https://github.com/adafruit/DHT-sensor-library/blob/master/examples/DHT_Unified_
 
 // Wifi
 #include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
 
 // display
 #include <Wire.h>
@@ -32,12 +35,27 @@ https://github.com/adafruit/DHT-sensor-library/blob/master/examples/DHT_Unified_
 #define FAN_RELAY_PIN  D8  // The ESP8266 pin connected to the IN pin of relay
 
 // Water atomizer controlled by relay - relay pin
-#define ATOMIZER_RELAY_PIN D7 // TODO
+#define ATOMIZER_RELAY_PIN D7 
 
-const char* SSID = "NAUGHTY";
-const char* PASSWORD = "VERYGOODBOY"; 
-const char* THINGSPEAK_API_KEY = "DONTFOMOONCRYPTO";
-const char* thingspeak_host = "api.thingspeak.com";
+#define THINGSPEAK_HOST "api.thingspeak.com"
+#define THINGSPEAK_PORT 80
+#define DATACAKE_HOST "api.datacake.co"
+#define DATACAKE_PORT 443
+#define SUPABASE_HOST "aqyrdklquuwloithqtal.supabase.co"
+#define SUPABASE_PORT 443
+
+const char* SSID = "NAUGHTY";                        // > your wifi ssid
+const char* PASSWORD = "VERYGOODBOY";                // > your wifi password
+const char* THINGSPEAK_API_KEY = "DONTFOMOONCRYPTO"; // > use your API key
+
+const char* DATA_CAKE_API_URL = "https://api.datacake.co/integrations/api/a3f2102d-****-****-****-ed1d240d8ff9/"; // > your device api url from data cake device Configuration
+const char* DATA_CAKE_API_KEY = "DONTFOMOONCRYPTO"; // > your API token from data cake account settings
+const char* DATA_CAKE_DEVICE_ID = "53283b61-****-****-****-e26079f231ac"; // > your device id from data cake device Configuration
+
+const char* SUPABASE_DB_API_ENDPOINT = "https://aqyrdklquuwloithqtal.supabase.co"; // > your supabase project url, you can check on project settings
+// > your access token from supabase project settings
+const char* SUPABASE_ACCESS_TOKEN = "DONTFOMOONCRYPTO";
+const char* SUPABASE_CONFIG_TABLE = "weather-station-config"; // > your table name as created on supabase
 
 SSD1306Wire display(0x3c, SDA_PIN, SCK_PIN);
 
@@ -59,14 +77,14 @@ const int UPDATE_INTERVAL_SECONDS = 600;
 // Read sensors every 10 seconds
 const int READ_INTERVAL_SECONDS = 60;
 
-// Turn on Fan when temperature is above this value
-const int TEMPERATURE_TRESHOLD = 15;
-
-// Turn on water atomizer when humidity is bellow this value
-const int HUMIDITY_TRESHOLD = 80;
-
 // Control atomizer to work in x minutes intervals
 const int ATOMIZER_REST_INTERVAL_SECONDS = 3 * 60;
+
+// Turn on Fan when temperature is above this value
+int TEMPERATURE_TRESHOLD = 20;
+
+// Turn on water atomizer when humidity is bellow this value
+int HUMIDITY_TRESHOLD = 60;
 
 long READ_TIME = 0;
 long UPDATE_TIME = 0;
@@ -75,6 +93,7 @@ long ATOMIZER_TIME_START = -360000; // so automizer can start at beggining if ne
 
 bool FAN_WORKING = false;
 bool ATOM_WORKING = false;
+bool RELAY_CHANGE = false;
 
 long TIME = 0;
 
@@ -87,7 +106,17 @@ void setup() {
   Serial.begin(115200);
   delay(10);
 
+  String setupStatus = ".";
+
   Serial.println("- - - - -  SETUP  - - - - -");
+
+  // Display setup
+  display.init();
+  display.clear();
+  display.flipScreenVertically();
+
+  displayMessage(setupStatus);
+  delay(500);
 
   Wire.pins(SDA_PIN, SCK_PIN);
   Wire.begin(0, 2);
@@ -101,21 +130,37 @@ void setup() {
   }
   Wire.endTransmission();
 
+  setupStatus += ATMOSPHERE_ON ? "." : " ";
+  displayMessage(setupStatus);
+  delay(500);
+
   // initialize light sensor
   Wire.beginTransmission(Light_ADDR);
   Wire.write(0b00000001);
   Wire.endTransmission();
+  
+  setupStatus += ".";
+  displayMessage(setupStatus);
+  delay(500);
 
   // initialize humidity sensor
   dht.begin();
 
-  // Display setup
-  display.init();
-  display.clear();
-  display.display();
-  display.setFont(ArialMT_Plain_10);
-  display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.flipScreenVertically();
+  setupStatus += ".";
+  displayMessage(setupStatus);
+  delay(500);
+
+  // 12v fan relay setup
+  pinMode(FAN_RELAY_PIN, OUTPUT);
+  setupStatus += ".";
+  displayMessage(setupStatus);
+  delay(500);
+
+  // Water atomizer setup
+  pinMode(ATOMIZER_RELAY_PIN, OUTPUT);
+  setupStatus += ".";
+  displayMessage(setupStatus);
+  delay(500);
 
   // Wifi setup
   Serial.print("Connecting to "); Serial.print(SSID); Serial.print(" ");
@@ -126,11 +171,8 @@ void setup() {
   }
   Serial.print(" connected: "); Serial.println(WiFi.localIP());
 
-  // 12v fan relay setup
-  pinMode(FAN_RELAY_PIN, OUTPUT);
-
-  // Water atomizer setup
-  pinMode(ATOMIZER_RELAY_PIN, OUTPUT);
+  setupStatus = WiFi.localIP().toString();
+  displayMessage(setupStatus);
 
   Serial.println("- - - - -  SETUP COMPLETE  - - - - -");
 }
@@ -138,7 +180,6 @@ void setup() {
 // read light value from light sensor
 void readLight() {
 
-  Serial.print("Light = ");
   int tempLight = 0;
 
   // reset
@@ -157,7 +198,7 @@ void readLight() {
     tempLight = (tempLight << 8) + (c & 0xFF);
   }
   light = tempLight / 1.2;
-  Serial.println(light);
+  Serial.print("l: "); Serial.print(light); Serial.print("\t");
 }
 
 // read pressure from Atmosphere sensor - not being used
@@ -170,7 +211,7 @@ void readPressure(){
     //String p = "P=" + String(bmp.readPressure()) + " Pa";
     //String a = "A=" + String(bmp.readAltitude(103000)) + " m";
 
-    Serial.print(pressure); Serial.println(" Pascal");
+    Serial.print("p: "); Serial.print(pressure); Serial.print(" Pascal\t");
     //Serial.print(p); Serial.println(a);
   } else {
     Serial.println("No atmosphere sensor found on startup.");
@@ -181,9 +222,8 @@ void readPressure(){
 void readTemperature(){
 
   if (ATMOSPHERE_ON) {
-    Serial.print("Temperature = ");
     temperature = bmp.readTemperature();
-    Serial.print(temperature); Serial.println("º C");
+    Serial.print("t: "); Serial.print(temperature); Serial.print("º C\t");
   } else {
     Serial.println("No atmosphere sensor found on startup.");
   }
@@ -193,24 +233,22 @@ void readTemperature(){
 // Read humidity from DHT sensor
 void readHumidity() {
 
-  Serial.print("Humidity = ");
   dht.humidity().getEvent(&event);
   humidity = event.relative_humidity;
-  Serial.print(humidity); Serial.println(" %");
+  Serial.print("h: ");Serial.print(humidity); Serial.println(" %");
 
   // if u want to use for temp: dht.temperature().getEvent(&event);
 }
 
 // update latest sensor readings to ThingSpeak
-void updateThingsSpeak() {
+void updateThingSpeak() {
 
-  // Serial.print("connecting to "); Serial.println(host);
+  // Serial.print("connecting to "); Serial.println(THINGSPEAK_HOST);
 
   // Use WiFiClient class to create TCP connections
   WiFiClient client;
-  const int httpPort = 80;
-  if (!client.connect(thingspeak_host, httpPort)) {
-    Serial.println("connection failed");
+  if (!client.connect(THINGSPEAK_HOST, THINGSPEAK_PORT)) {
+    Serial.println("ThingSpeak - connection failed");
     return;
   }
 
@@ -227,7 +265,7 @@ void updateThingsSpeak() {
   // Serial.print("Requesting URL: "); Serial.println(url);
 
   // This will send the request to the server
-  client.print("GET " + url + " HTTP/1.1\r\nHost: " + thingspeak_host + "\r\nConnection: close\r\n\r\n");
+  client.print("GET " + url + " HTTP/1.1\r\nHost: " + THINGSPEAK_HOST + "\r\nConnection: close\r\n\r\n");
   delay(10);
   while (!client.available()) {
     delay(100);
@@ -237,9 +275,158 @@ void updateThingsSpeak() {
   // Read all the lines of the reply from server and print them to Serial
   while (client.available()) {
     String line = client.readStringUntil('\r');
-    Serial.print(line);
+    //Serial.print(line);
   }
+
+  client.stop();
   Serial.println();
+
+}
+
+// update latest sensor readings to Datacake
+void updateDatacake() {
+
+  // Serial.print("connecting to "); Serial.println(THINGSPEAK_HOST);
+
+  // Use WiFiClient class to create TCP connections
+  WiFiClientSecure client;
+  client.setInsecure();
+  if (!client.connect(DATACAKE_HOST, DATACAKE_PORT)) {
+    Serial.println("connection failed.");
+    return;
+  }
+
+  HTTPClient http;
+
+  StaticJsonDocument<512> doc;
+  
+  doc["device"] = DATA_CAKE_DEVICE_ID;
+  doc["TEMPERATURE"] = temperature;
+  doc["HUMIDITY"] = humidity;
+  doc["LIGHT"] = light;
+  doc["PRESSURE"] = pressure;
+  doc["FAN_ON"] = FAN_WORKING;
+  doc["ATOM_ON"] = ATOM_WORKING;
+
+  char post_message[512]; 
+  serializeJsonPretty(doc, post_message);
+  //Serial.println(post_message);
+
+  http.begin(client, DATA_CAKE_API_URL); 
+  http.addHeader("Authorization", "Token " + String(DATA_CAKE_API_KEY)); 
+  http.addHeader("Content-Type", "application/json"); 
+  int code = http.PUT(post_message); 
+  
+  if (code < 300){
+      //Serial.print("Datacake: Posted sucessfuly");
+      String response = http.getString();  
+      //Serial.println(response );
+  } else {
+    Serial.print("Failed to post to Datacake: "); Serial.println(code); 
+  }
+
+  // free resources
+  http.end();
+  client.stop();
+
+}
+
+// get tresholds from supabase
+void getSupabaseInfo() {
+
+  // Use WiFiClient class to create TCP connections
+  WiFiClientSecure client;
+  client.setInsecure();
+  if (!client.connect(SUPABASE_HOST, SUPABASE_PORT)) {
+    Serial.println("connection failed.");
+    return;
+  }
+
+  HTTPClient http;
+  
+  // Read data from supabase_config_table
+  String api_url = String(SUPABASE_DB_API_ENDPOINT) + "/rest/v1/" + String(SUPABASE_CONFIG_TABLE);
+  //Serial.println(api_url);
+
+  http.begin(client, api_url); 
+  http.addHeader("apikey", String(SUPABASE_ACCESS_TOKEN));
+  http.addHeader("Authorization", "Bearer " + String(SUPABASE_ACCESS_TOKEN));
+  int code = http.GET();
+
+  if (code < 300){
+      //Serial.print("Supabased Get sucessfuly: ");
+      String response = http.getString();  
+      //Serial.println(response);
+
+      StaticJsonDocument<512> doc;
+      deserializeJson(doc, response);
+
+      // set tresholds with retrieved data
+      TEMPERATURE_TRESHOLD = doc[0]["TEMPERATURE_TRESHOLD"];
+      HUMIDITY_TRESHOLD = doc[0]["HUMIDITY_TRESHOLD"];
+
+      //Serial.println("Temp treshold: " + String(TEMPERATURE_TRESHOLD));
+      //Serial.println("Humid treshold: " + String(HUMIDITY_TRESHOLD));
+
+  } else {
+    Serial.print("Failed to get from Firebase - "); Serial.println(code); 
+  } 
+
+  // Free resources
+  http.end();
+  client.stop();
+
+  /**
+  API DOCS from supabase lets u know what to send in your request, example:
+
+Insert a row
+curl -X POST 'https://aqyrdklquuwloithqtal.supabase.co/rest/v1/weather-station-config' \
+-H "apikey: SUPABASE_CLIENT_ANON_KEY" \
+-H "Authorization: Bearer SUPABASE_CLIENT_ANON_KEY" \
+-H "Content-Type: application/json" \
+-H "Prefer: return=minimal" \
+-d '{ "some_column": "someValue", "other_column": "otherValue" }'
+
+Insert many rows
+curl -X POST 'https://aqyrdklquuwloithqtal.supabase.co/rest/v1/weather-station-config' \
+-H "apikey: SUPABASE_CLIENT_ANON_KEY" \
+-H "Authorization: Bearer SUPABASE_CLIENT_ANON_KEY" \
+-H "Content-Type: application/json" \
+-d '[{ "some_column": "someValue" }, { "other_column": "otherValue" }]'
+
+Upsert matching rows
+curl -X POST 'https://aqyrdklquuwloithqtal.supabase.co/rest/v1/weather-station-config' \
+-H "apikey: SUPABASE_CLIENT_ANON_KEY" \
+-H "Authorization: Bearer SUPABASE_CLIENT_ANON_KEY" \
+-H "Content-Type: application/json" \
+-H "Prefer: resolution=merge-duplicates" \
+-d '{ "some_column": "someValue", "other_column": "otherValue" }'
+
+
+  // Example code:
+  HTTPClient http;
+  StaticJsonDocument<512> doc;
+  
+  doc["TEMPERATURE"] = temperature;
+  doc["HUMIDITY"] = humidity;
+  doc["LIGHT"] = light;
+  doc["PRESSURE"] = pressure;
+  doc["FAN_ON"] = FAN_WORKING;
+  doc["ATOM_ON"] = ATOM_WORKING;
+
+  char message[512]; 
+  serializeJsonPretty(doc, message);
+  
+  String api_url = String(SUPABASE_DB_API_ENDPOINT) + "/rest/v1/" + String(SUPABASE_CONFIG_TABLE);
+
+  Serial.println(api_url);
+
+  http.begin(client, api_url); 
+  http.addHeader("apikey", String(SUPABASE_ACCESS_TOKEN));
+  http.addHeader("Authorization", "Bearer " + String(SUPABASE_ACCESS_TOKEN));
+  int code = http.POST();
+
+  **/
 }
 
 // Simply write a message on the display
@@ -251,15 +438,17 @@ void displayMessage(String message) {
   display.display();
 }
 
-// print sensor data to serial
-void printWeatherStationSensorData() {
+// show sensor data on display
+void displayWeatherStationSensorData() {
   display.clear();
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   display.drawStringMaxWidth(0, 0, 128, "Humidity: " + String(humidity) + " %");
   display.drawStringMaxWidth(0, 12, 128, "Temperature: " + String(temperature) + " ºC");
   display.drawStringMaxWidth(0, 24, 128, "Light: " + String(light));
+  display.drawStringMaxWidth(0, 36, 128, "Max ºC: " + String(TEMPERATURE_TRESHOLD));
   display.drawStringMaxWidth(0, 48, 128, "Fan: " + String(FAN_WORKING ? "On" : "Off"));
+  display.drawStringMaxWidth(64, 36, 128, "min %: " + String(HUMIDITY_TRESHOLD));
   display.drawStringMaxWidth(64, 48, 128, "Atom: " + String(ATOM_WORKING ? "On" : "Off"));
   display.display();
 }
@@ -272,11 +461,13 @@ void checkAndAdjustTemperature() {
     FAN_WORKING = true;
 
     Serial.println("Staring Fan - " + String(temperature) + " ºC temperature is above treshold (" + String(TEMPERATURE_TRESHOLD) + ") :: " + String(millis()));
+    RELAY_CHANGE = true;
   } else if (temperature < TEMPERATURE_TRESHOLD && FAN_WORKING) {
     digitalWrite(FAN_RELAY_PIN, LOW); // turn off fan via relay
     FAN_WORKING = false;
 
     Serial.println("Stopping Fan - " + String(temperature) + " ºC temperature is bellow or equal treshold (" + String(TEMPERATURE_TRESHOLD) + ") :: " + String(millis()));
+    RELAY_CHANGE = true;
   }
 
 }
@@ -293,6 +484,7 @@ void checkAndAdjustHumidity() {
       ATOM_WORKING = true;
 
       Serial.println("Starting atomizer - " + String(humidity) + " % humidity is bellow treshold (" + String(HUMIDITY_TRESHOLD) + ") :: " + String(TIME));
+      RELAY_CHANGE = true;
     } 
     // atomizer is supposed to be working but the first X seconds have passed, turn off atomizer
     else if (TIME - ATOMIZER_TIME_START > ATOMIZER_REST_INTERVAL_SECONDS * 1000 && ATOM_WORKING) { 
@@ -301,6 +493,7 @@ void checkAndAdjustHumidity() {
         ATOM_WORKING = false;
         
         Serial.println("Making a break on Atomizer - " + String(humidity) + " % humidity is bellow treshold (" + String(HUMIDITY_TRESHOLD) + ") :: " + String(TIME));
+        RELAY_CHANGE = true;
     }
 
   } else if (ATOM_WORKING) {
@@ -309,6 +502,7 @@ void checkAndAdjustHumidity() {
     ATOM_WORKING = false;
 
     Serial.println("Stopping Atomizer - " + String(humidity) + " % humidity is above or equal treshold (" + String(HUMIDITY_TRESHOLD) + ") :: " + String(TIME));
+    RELAY_CHANGE = true;
   }
 
 }
@@ -333,18 +527,24 @@ void loop() {
 
     READ_TIME = TIME;
 
+    displayWeatherStationSensorData();
+
+    getSupabaseInfo();
+
     // play God.
     adjustWeather();
+
+    // update tresholds and fan/atom modes
+    displayWeatherStationSensorData();
   }
 
   // update ThingSpeak
-  if (TIME - UPDATE_TIME > UPDATE_INTERVAL_SECONDS * 1000) {
-    updateThingsSpeak();
-
+  if (TIME - UPDATE_TIME > UPDATE_INTERVAL_SECONDS * 1000 || RELAY_CHANGE) {
+    updateThingSpeak();
+    updateDatacake();
     UPDATE_TIME = TIME;
+    RELAY_CHANGE = false;
   }
-
-  printWeatherStationSensorData();
 
   // Go back to sleep. If your sensor is battery powered you might
   delay(1000 * READ_INTERVAL_SECONDS);
